@@ -1,0 +1,204 @@
+
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Retro Squash — Play</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  html,body{height:100%;margin:0;background:#000;color:#fff;font-family:monospace}
+  #game{display:block;margin:0 auto;background:#0b0b10;touch-action:none}
+  #hint{position:fixed;left:8px;top:8px;background:rgba(0,0,0,0.45);padding:6px 8px;border-radius:6px;font-size:13px}
+  .btn{position:fixed;right:8px;top:8px;background:#111;border:1px solid #444;padding:6px 8px;border-radius:6px}
+</style>
+</head>
+<body>
+<div id="hint">W/S or ↑/↓ to move • Tap canvas to pause/play • Score: <span id="sc">0</span></div>
+<canvas id="game" width="800" height="500"></canvas>
+<button class="btn" id="home">Add to Home Screen (Safari)</button>
+<script>
+(() => {
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('sc');
+let w = canvas.width, h = canvas.height;
+
+// scaling for mobile
+function fit() {
+  const ratio = Math.min(window.innerWidth / w, window.innerHeight / h);
+  canvas.style.width = Math.round(w * ratio) + 'px';
+  canvas.style.height = Math.round(h * ratio) + 'px';
+}
+window.addEventListener('resize', fit);
+fit();
+
+// game state
+let racketY = h/2 - 40, racketH = 80;
+let ballX = 140, ballY = h/2, ballR = 8;
+let ballVX = 4, ballVY = 2;
+let score = 0;
+let running = true;
+let lastHitTime = 0;
+let combo = 0;
+
+// controls
+let up=false, down=false;
+window.addEventListener('keydown', e => {
+  if(e.key==='ArrowUp' || e.key==='w') up=true;
+  if(e.key==='ArrowDown' || e.key==='s') down=true;
+});
+window.addEventListener('keyup', e => {
+  if(e.key==='ArrowUp' || e.key==='w') up=false;
+  if(e.key==='ArrowDown' || e.key==='s') down=false;
+});
+
+// touch controls: tap top/bottom half to move, swipe for quick moves
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  const rect = canvas.getBoundingClientRect();
+  const y = (t.clientY - rect.top) * (canvas.height/rect.height);
+  if(y < canvas.height/2) up = true; else down = true;
+});
+canvas.addEventListener('touchend', e => { up=false; down=false; });
+
+// click/tap to pause
+canvas.addEventListener('click', () => running = !running);
+
+// audio (WebAudio) — two short synthesized sounds: whack and wall
+const A = new (window.AudioContext || window.webkitAudioContext)();
+function playWhack() {
+  const now = A.currentTime;
+  const o = A.createOscillator();
+  const g = A.createGain();
+  o.type = 'square';
+  o.frequency.setValueAtTime(350, now);
+  o.frequency.exponentialRampToValueAtTime(180, now + 0.08);
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.25, now + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+  o.connect(g); g.connect(A.destination);
+  o.start(now); o.stop(now + 0.26);
+}
+function playWall() {
+  const now = A.currentTime;
+  const o = A.createOscillator();
+  const g = A.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(200, now);
+  o.frequency.exponentialRampToValueAtTime(90, now + 0.18);
+  g.gain.setValueAtTime(0.001, now);
+  g.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
+  o.connect(g); g.connect(A.destination);
+  o.start(now); o.stop(now + 0.6);
+}
+
+// physics helpers
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+
+// main loop
+function update() {
+  if(!running) return;
+  // player movement
+  if(up) racketY -= 6;
+  if(down) racketY += 6;
+  racketY = clamp(racketY, 0, h - racketH);
+
+  // ball move
+  ballX += ballVX;
+  ballY += ballVY;
+
+  // top/bottom bounce
+  if(ballY - ballR < 0) { ballY = ballR; ballVY *= -1; playWall(); combo=0; }
+  if(ballY + ballR > h) { ballY = h - ballR; ballVY *= -1; playWall(); combo=0; }
+
+  // front wall (right)
+  if(ballX + ballR > w) { ballX = w - ballR; ballVX *= -1; playWall(); combo=0; }
+
+  // racket collision (left)
+  if(ballX - ballR < 30 && ballY > racketY && ballY < racketY + racketH) {
+    // calculate hit position relative to racket center to add angle/spin
+    const rel = (ballY - (racketY + racketH/2)) / (racketH/2);
+    const speed = Math.hypot(ballVX, ballVY);
+    const newAngle = rel * 0.9; // tilt
+    const newSpeed = Math.min(10, speed + 0.45);
+    ballVX = Math.abs(newSpeed) * Math.cos(newAngle);
+    ballVY = newSpeed * Math.sin(newAngle);
+    ballX = 30 + ballR + 0.1;
+    playWhack();
+    score += 1;
+    combo += 1;
+    lastHitTime = Date.now();
+    // small speed up after combos
+    if(combo % 6 === 0) { ballVX *= 1.12; ballVY *= 1.12; }
+    scoreEl.textContent = score;
+  }
+
+  // miss
+  if(ballX + ballR < 0) {
+    // reset
+    score = 0; combo = 0;
+    ballX = 140; ballY = h/2;
+    ballVX = 4; ballVY = 2;
+    scoreEl.textContent = score;
+  }
+}
+
+function draw() {
+  // background with slight retro grid
+  ctx.fillStyle = '#07070a';
+  ctx.fillRect(0,0,w,h);
+
+  // scanlines
+  for(let i=0;i<h;i+=2){
+    ctx.fillStyle = 'rgba(0,0,0,0.02)';
+    ctx.fillRect(0,i,w,1);
+  }
+
+  // court walls
+  ctx.fillStyle = '#222';
+  ctx.fillRect(0,0,w,10); // top
+  ctx.fillRect(0,h-10,w,10); // bottom
+  ctx.fillStyle = '#333';
+  ctx.fillRect(w-6,0,6,h); // front wall
+
+  // racket
+  ctx.fillStyle = '#8fff6d';
+  ctx.fillRect(20, racketY, 10, racketH);
+
+  // ball (glow + shadow)
+  ctx.beginPath();
+  ctx.fillStyle = '#ffd84d';
+  ctx.arc(ballX, ballY, ballR+1.5, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.fillStyle = '#ffb830';
+  ctx.arc(ballX, ballY, ballR, 0, Math.PI*2);
+  ctx.fill();
+
+  // retro score text
+  ctx.fillStyle = '#cfe';
+  ctx.font = '18px monospace';
+  ctx.fillText('Retro Squash', w/2 - 60, 24);
+  // combo indicator (if active)
+  if(Date.now() - lastHitTime < 1800 && combo>1) {
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px monospace';
+    ctx.fillText('Combo x' + combo + '!', w/2 - 32, 46);
+  }
+}
+
+function loop() { update(); draw(); requestAnimationFrame(loop); }
+loop();
+
+// small hint button (non-functional on iOS for adding to Home Screen programmatically)
+document.getElementById('home').addEventListener('click', () => {
+  alert('To add to Home Screen in Safari: tap Share → Add to Home Screen. Then launch from the Home Screen like an app!');
+});
+
+// low-res pixel look on small screens (optional)
+})();
+</script>
+</body>
+</html>
